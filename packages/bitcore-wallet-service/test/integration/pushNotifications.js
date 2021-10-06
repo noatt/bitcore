@@ -20,7 +20,7 @@ const ObjectID  = require('mongodb').ObjectID;
 var TestData = require('../testdata');
 var helpers = require('./helpers');
 const TOKENS = ['0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', '0x8E870D67F660D95d5be530380D0eC0bd388289E1', '0x056Fd409E1d7A124BD7017459dFEa2F387b6d5Cd'];
-
+const CUSTOM_TOKENS = ['0x0d8775f648430679a709e98d2b0cb6250d2887ef'];
 
 describe('Push notifications', function() {
   var server, wallet, requestStub, pushNotificationsService, walletId;
@@ -154,6 +154,64 @@ describe('Push notifications', function() {
       });
     });
 
+    it('should show the correct template for zero amount outgoin transactions', function(done) {
+      server.createAddress({}, function(err, address) {
+        should.not.exist(err);
+
+        // Simulate zero amount outgoing tx notification
+        // ETH interaction with a contract
+        server._notify('NewOutgoingTx', {
+          txid: '999',
+          address: address,
+          amount: 0,
+        }, {
+          isGlobal: false
+        }, function(err) {
+          setTimeout(function() {
+            var calls = requestStub.getCalls();
+            var args = _.map(calls, function(c) {
+              return c.args[0];
+            });
+            calls.length.should.equal(2); // NewOutgoingTx
+
+            args[1].body.notification.title.should.contain('Payment sent');
+            args[1].body.notification.body.should.contain('A Payment has been sent from your wallet.');
+
+            should.not.exist(args[0].body.notification);
+            done();
+          }, 100);
+        });
+      });
+    });
+
+    it('should show the correct template for non zero amount outgoing transactions', function(done) {
+      server.createAddress({}, function(err, address) {
+        should.not.exist(err);
+
+        server._notify('NewOutgoingTx', {
+          txid: '999',
+          address: address,
+          amount: 12345
+        }, {
+          isGlobal: false
+        }, function(err) {
+          setTimeout(function() {
+            var calls = requestStub.getCalls();
+            var args = _.map(calls, function(c) {
+              return c.args[0];
+            });
+            calls.length.should.equal(2); // NewOutgoingTx
+
+            args[1].body.notification.title.should.contain('Payment sent');
+            args[1].body.notification.body.should.contain('A Payment of 123 bits has been sent from your wallet');
+
+            should.not.exist(args[0].body.notification);
+            done();
+          }, 100);
+        });
+      });
+    });
+
     it('should notify copayers when payment is received', function(done) {
       server.createAddress({}, function(err, address) {
         should.not.exist(err);
@@ -236,7 +294,7 @@ describe('Push notifications', function() {
       server.createAddress({}, function(err, address) {
         should.not.exist(err);
 
-         // Simulate txp accepted by creator
+        // Simulate txp accepted by creator
         server._notify('TxProposalFinallyAccepted', {
           txid: '123'
         }, {
@@ -306,6 +364,33 @@ describe('Push notifications', function() {
             should.exist(args[1].body.data);
             done();
           }, 100);
+        });
+      });
+
+      it('should use different template for new incoming tx if network is testnet', function(done) {
+        server.createAddress({}, (err, address) => {
+          should.not.exist(err);
+
+          // Simulate incoming tx notification
+          server._notify('NewIncomingTx', {
+            txid: '999',
+            address: address,
+            amount: 12300000,
+            network: 'testnet'
+          }, (err) => {
+            should.not.exist(err);
+
+            setTimeout(function() {
+              var calls = requestStub.getCalls();
+              calls.length.should.equal(2);
+              var args = _.map(calls, function(c) {
+                return c.args[0];
+              });
+              args[1].body.notification.title.should.contain('New payment received');
+              args[1].body.notification.body.should.contain('TESTNET');
+              done();
+            }, 100);
+          });
         });
       });
     });
@@ -688,6 +773,99 @@ describe('Push notifications', function() {
     });
   });
 
+  describe('custom ERC20 wallet', () => {
+    beforeEach((done) => {
+
+      helpers.beforeEach((res) => {
+        helpers.createAndJoinWallet(1, 1, { coin: 'eth' }, (s, w) => {
+          server = s;
+          wallet = w;
+
+          var i = 0;
+          async.eachSeries(w.copayers, function(copayer, next) {
+            helpers.getAuthServer(copayer.id, function(server) {
+              async.parallel([
+
+                function(done) {
+                  server.savePreferences({
+                    email: 'copayer' + (++i) + '@domain.com',
+                    language: 'en',
+                    unit: 'bit',
+                    tokenAddresses: CUSTOM_TOKENS,
+                  }, done);
+                },
+                function(done) {
+                  server.pushNotificationsSubscribe({
+                    token: '1234',
+                    packageName: 'com.wallet',
+                    platform: 'Android',
+                    walletId: '123'
+                  }, done);
+                },
+              ], next);
+
+            });
+          }, function(err) {
+            should.not.exist(err);
+            pushNotificationsService = new PushNotificationsService();
+            requestStub = sinon.stub(pushNotificationsService, '_makeRequest').callsFake(()=>{});
+            requestStub.yields();
+            pushNotificationsService.start({
+              lockOpts: {},
+              messageBroker: server.messageBroker,
+              storage: helpers.getStorage(),
+              request: null,
+              pushNotificationsOpts: {
+                templatePath: 'templates',
+                defaultLanguage: 'en',
+                defaultUnit: 'eth',
+                subjectPrefix: '',
+                pushServerUrl: 'http://localhost:8000',
+                authorizationKey: 'secret',
+              },
+            }, function(err) {
+              should.not.exist(err);
+              done();
+            });
+          });
+        });
+      });
+    });
+
+    it('should send notification if the tx is custom token', (done) => {
+      server.savePreferences({
+        language: 'en',
+        unit: 'bit',
+      }, function(err) {
+        server.createAddress({}, (err, address) => {
+          should.not.exist(err);
+          
+          // Simulate incoming tx notification
+          server._notify('NewIncomingTx', {
+            txid: '997',
+            address: address,
+            amount: 4e18,
+            tokenAddress: CUSTOM_TOKENS[0]
+          }, {
+            isGlobal: true
+          }, (err) => {
+            setTimeout(function() {
+              var calls = requestStub.getCalls();
+              calls.length.should.equal(2);
+              var args = _.map(_.takeRight(calls, 2), function(c) {
+                return c.args[0];
+              });
+              args[1].notification.title.should.contain('New payment received');
+              args[1].notification.body.should.contain('4.00');
+              args[1].data.tokenAddress.should.equal('0x0d8775f648430679a709e98d2b0cb6250d2887ef');
+              done();
+            }, 1000);
+          });
+        });
+      });
+    });
+  });
+
   describe('ERC20 wallet', () => {
     beforeEach((done) => {
 
@@ -866,7 +1044,7 @@ describe('Push notifications', function() {
           }, (err) => {
             setTimeout(function() {
               var calls = requestStub.getCalls();
-              calls.length.should.equal(1);
+              calls.length.should.equal(2);
               done();
             }, 100);
           });
@@ -1042,7 +1220,7 @@ describe('Push notifications', function() {
               done();
             }, 100);
           });
-        });
       });
+    });
   });
 });

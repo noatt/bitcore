@@ -1,6 +1,7 @@
 import { Component, Input, OnInit } from '@angular/core';
 import { Events } from 'ionic-angular';
 import * as _ from 'lodash';
+import { UTXO_CHAINS } from '../../constants';
 import { AddressProvider } from '../../providers/address/address';
 import { ChainNetwork } from '../../providers/api/api';
 import { BlocksProvider } from '../../providers/blocks/blocks';
@@ -9,7 +10,6 @@ import {
   AppEthCoin,
   TxsProvider
 } from '../../providers/transactions/transactions';
-
 @Component({
   selector: 'transaction-list',
   templateUrl: 'transaction-list.html'
@@ -40,10 +40,7 @@ export class TransactionListComponent implements OnInit {
   public ngOnInit(): void {
     if (this.transactions && this.transactions.length === 0) {
       if (this.queryType === 'blockHash') {
-        if (
-          this.chainNetwork.chain === 'BTC' ||
-          this.chainNetwork.chain === 'BCH'
-        ) {
+        if (UTXO_CHAINS.includes(this.chainNetwork.chain)) {
           this.fetchBlockTxCoinInfo(1);
         } else {
           this.txProvider
@@ -58,10 +55,7 @@ export class TransactionListComponent implements OnInit {
       } else if (this.queryType === 'address') {
         const txs: any = [];
 
-        if (
-          this.chainNetwork.chain === 'BTC' ||
-          this.chainNetwork.chain === 'BCH'
-        ) {
+        if (UTXO_CHAINS.includes(this.chainNetwork.chain)) {
           this.addrProvider
             .getAddressActivityCoins(this.queryValue, this.chainNetwork)
             .subscribe(
@@ -153,7 +147,8 @@ export class TransactionListComponent implements OnInit {
   public loadMore(infiniteScroll) {
     if (
       (this.queryType === 'blockHash' && this.chainNetwork.chain === 'BTC') ||
-      this.chainNetwork.chain === 'BCH'
+      this.chainNetwork.chain === 'BCH' ||
+      this.chainNetwork.chain === 'DOGE'
     ) {
       this.fetchBlockTxCoinInfo(this.blockPageNum);
       this.limit += this.chunkSize;

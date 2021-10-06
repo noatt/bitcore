@@ -6,23 +6,8 @@ import { Storage } from './storage';
 const $ = require('preconditions').singleton();
 const Common = require('./common');
 const Defaults = Common.Defaults;
+const Constants = Common.Constants;
 import logger from './logger';
-
-const fiatCurrencies = [
-  { code: 'USD', name: 'US Dollar' },
-  { code: 'INR', name: 'Indian Rupee' },
-  { code: 'GBP', name: 'Pound Sterling' },
-  { code: 'EUR', name: 'Eurozone Euro' },
-  { code: 'CAD', name: 'Canadian Dollar' },
-  { code: 'COP', name: 'Colombian Peso' },
-  { code: 'NGN', name: 'Nigerian Naira' },
-  { code: 'BRL', name: 'Brazilian Real' },
-  { code: 'ARS', name: 'Argentine Peso' },
-  { code: 'AUD', name: 'Australian Dollar' },
-  { code: 'JPY', name: 'Japanese Yen' },
-  { code: 'NZD', name: 'New Zealand Dollar' }
-];
-
 export class FiatRateService {
   request: request.RequestAPI<any, any, any>;
   defaultProvider: any;
@@ -72,7 +57,7 @@ export class FiatRateService {
 
   _fetch(cb?) {
     cb = cb || function() {};
-    const coins = ['btc', 'bch', 'eth', 'xrp'];
+    const coins = ['btc', 'bch', 'eth', 'xrp', 'doge', 'ltc'];
     const provider = this.providers[0];
 
     //    async.each(this.providers, (provider, next) => {
@@ -115,7 +100,7 @@ export class FiatRateService {
           return cb(new Error('No parse function for provider ' + provider.name));
         }
         try {
-          const rates = _.filter(provider.parseFn(body), x => _.some(fiatCurrencies, ['code', x.code]));
+          const rates = _.filter(provider.parseFn(body), x => _.some(Defaults.FIAT_CURRENCIES, ['code', x.code]));
           return cb(null, rates);
         } catch (e) {
           return cb(e);
@@ -137,14 +122,9 @@ export class FiatRateService {
     async.map(
       [].concat(ts),
       (ts, cb) => {
-        // Temporary rates for Wallet Beta. TODO: Remove this
         if (coin === 'wbtc') {
           logger.info('Using btc for wbtc rate.');
           coin = 'btc';
-        }
-        if (coin === 'dai') {
-          logger.info('Using usdc for dai rate.');
-          coin = 'usdc';
         }
         this.storage.fetchFiatRate(coin, opts.code, ts, (err, rate) => {
           if (err) return cb(err);
@@ -169,22 +149,81 @@ export class FiatRateService {
     $.shouldBeFunction(cb, 'Failed state: type error (cb not a function) at <getRates()>');
 
     opts = opts || {};
+
+    const now = Date.now();
+    const ts = opts.ts ? opts.ts : now;
+    let fiatFiltered = [];
+    let rates = [];
+
+    if (opts.code) {
+      fiatFiltered = _.filter(Defaults.FIAT_CURRENCIES, ['code', opts.code]);
+      if (!fiatFiltered.length) return cb(opts.code + ' is not supported');
+    }
+    const currencies: { code: string; name: string }[] = fiatFiltered.length ? fiatFiltered : Defaults.FIAT_CURRENCIES;
+
+    async.map(
+      _.values(Constants.COINS),
+      (coin, cb) => {
+        rates[coin] = [];
+        async.map(
+          currencies,
+          (currency, cb) => {
+            let c = coin;
+            if (coin === 'wbtc') {
+              logger.info('Using btc for wbtc rate.');
+              c = 'btc';
+            }
+            this.storage.fetchFiatRate(c, currency.code, ts, (err, rate) => {
+              if (err) return cb(err);
+              if (rate && ts - rate.ts > Defaults.FIAT_RATE_MAX_LOOK_BACK_TIME * 60 * 1000) rate = null;
+              return cb(null, {
+                ts: +ts,
+                rate: rate ? rate.value : undefined,
+                fetchedOn: rate ? rate.ts : undefined,
+                code: currency.code,
+                name: currency.name
+              });
+            });
+          },
+          (err, res: any) => {
+            if (err) return cb(err);
+            var obj = {};
+            obj[coin] = res;
+            return cb(null, obj);
+          }
+        );
+      },
+      (err, res: any) => {
+        if (err) return cb(err);
+        return cb(null, Object.assign({}, ...res));
+      }
+    );
+  }
+
+  getRatesByCoin(opts, cb) {
+    $.shouldBeFunction(cb, 'Failed state: type error (cb not a function) at <getRatesByCoin()>');
+
+    opts = opts || {};
     const rates = [];
 
     const now = Date.now();
-    const coin = opts.coin;
+    let coin = opts.coin;
     const ts = opts.ts ? opts.ts : now;
     let fiatFiltered = [];
 
     if (opts.code) {
-      fiatFiltered = _.filter(fiatCurrencies, ['code', opts.code]);
+      fiatFiltered = _.filter(Defaults.FIAT_CURRENCIES, ['code', opts.code]);
       if (!fiatFiltered.length) return cb(opts.code + ' is not supported');
     }
-    const currencies = fiatFiltered.length ? fiatFiltered : fiatCurrencies;
+    const currencies: { code: string; name: string }[] = fiatFiltered.length ? fiatFiltered : Defaults.FIAT_CURRENCIES;
 
     async.map(
       currencies,
       (currency, cb) => {
+        if (coin === 'wbtc') {
+          logger.info('Using btc for wbtc rate.');
+          coin = 'btc';
+        }
         this.storage.fetchFiatRate(coin, currency.code, ts, (err, rate) => {
           if (err) return cb(err);
           if (rate && ts - rate.ts > Defaults.FIAT_RATE_MAX_LOOK_BACK_TIME * 60 * 1000) rate = null;
@@ -214,7 +253,7 @@ export class FiatRateService {
     // Oldest date in timestamp range in epoch number ex. 24 hours ago
     const now = Date.now() - Defaults.FIAT_RATE_FETCH_INTERVAL * 60 * 1000;
     const ts = _.isNumber(opts.ts) ? opts.ts : now;
-    const coins = ['btc', 'bch', 'eth', 'xrp'];
+    const coins = ['btc', 'bch', 'eth', 'xrp', 'doge', 'ltc'];
 
     async.map(
       coins,

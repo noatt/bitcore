@@ -112,12 +112,14 @@ export class ExpressApp {
         const status = err.code == 'NOT_AUTHORIZED' ? 401 : 400;
         if (!opts.disableLogs) logger.info('Client Err: ' + status + ' ' + req.url + ' ' + JSON.stringify(err));
 
+        const clientError: { code: string; message: string; messageData?: object } = {
+          code: err.code,
+          message: err.message
+        };
+        if (err.messageData) clientError.messageData = err.messageData;
         res
           .status(status)
-          .json({
-            code: err.code,
-            message: err.message
-          })
+          .json(clientError)
           .end();
       } else {
         let code = 500,
@@ -256,7 +258,7 @@ export class ExpressApp {
       try {
         res.setHeader('User-Agent', 'copay');
         var options = {
-          uri: 'https://api.github.com/repos/bitpay/copay/releases/latest',
+          uri: 'https://api.github.com/repos/bitpay/wallet/releases/latest',
           headers: {
             'User-Agent': 'Copay'
           },
@@ -820,6 +822,17 @@ export class ExpressApp {
       });
     });
 
+    router.post('/v1/token/info', (req, res) => {
+      getServerWithAuth(req, res, async server => {
+        try {
+          const tokenContractInfo = await server.getTokenContractInfo(req.body);
+          res.json(tokenContractInfo);
+        } catch (err) {
+          returnError(err, res, req);
+        }
+      });
+    });
+
     router.get('/v1/sendmaxinfo/', (req, res) => {
       getServerWithAuth(req, res, server => {
         const q = req.query;
@@ -1129,6 +1142,34 @@ export class ExpressApp {
       });
     });
 
+    router.get('/v1/nonce/:address', (req, res) => {
+      getServerWithAuth(req, res, async server => {
+        const opts = {
+          coin: req.query.coin || 'eth',
+          network: req.query.network || 'livenet',
+          address: req.params['address']
+        };
+        try {
+          const nonce = await server.getNonce(opts);
+          res.json(nonce);
+        } catch (err) {
+          returnError(err, res, req);
+        }
+      });
+    });
+
+    router.post('/v1/clearcache/', (req, res) => {
+      getServerWithAuth(req, res, server => {
+        server.clearWalletCache().then(val => {
+          if (val) {
+            res.sendStatus(200);
+          } else {
+            res.sendStatus(500);
+          }
+        });
+      });
+    });
+
     router.get('/v1/fiatrates/:code/', (req, res) => {
       SetPublicCache(res, 5 * ONE_MINUTE);
       let server;
@@ -1166,6 +1207,24 @@ export class ExpressApp {
       });
     });
 
+    router.get('/v3/fiatrates/', (req, res) => {
+      SetPublicCache(res, 5 * ONE_MINUTE);
+      let server;
+      const opts = {
+        code: req.query.code || null,
+        ts: req.query.ts ? +req.query.ts : null
+      };
+      try {
+        server = getServer(req, res);
+      } catch (ex) {
+        return returnError(ex, res, req);
+      }
+      server.getFiatRates(opts, (err, rates) => {
+        if (err) return returnError(err, res, req);
+        res.json(rates);
+      });
+    });
+
     router.get('/v3/fiatrates/:coin/', (req, res) => {
       SetPublicCache(res, 5 * ONE_MINUTE);
       let server;
@@ -1179,7 +1238,7 @@ export class ExpressApp {
       } catch (ex) {
         return returnError(ex, res, req);
       }
-      server.getFiatRates(opts, (err, rates) => {
+      server.getFiatRatesByCoin(opts, (err, rates) => {
         if (err) return returnError(err, res, req);
         res.json(rates);
       });
@@ -1240,6 +1299,19 @@ export class ExpressApp {
           if (err) return returnError(err, res, req);
           res.json(response);
         });
+      });
+    });
+
+    router.get('/v1/services', (req, res) => {
+      let server;
+      try {
+        server = getServer(req, res);
+      } catch (ex) {
+        return returnError(ex, res, req);
+      }
+      server.getServicesData((err, response) => {
+        if (err) return returnError(err, res, req);
+        res.json(response);
       });
     });
 
@@ -1380,6 +1452,67 @@ export class ExpressApp {
         .catch(err => {
           if (err) return returnError(err, res, req);
         });
+    });
+
+    router.get('/v1/service/oneInch/getReferrerFee', (req, res) => {
+      let server;
+      try {
+        server = getServer(req, res);
+      } catch (ex) {
+        return returnError(ex, res, req);
+      }
+      server
+        .oneInchGetReferrerFee(req)
+        .then(response => {
+          res.json(response);
+        })
+        .catch(err => {
+          if (err) return returnError(err, res, req);
+        });
+    });
+
+    router.post('/v1/service/oneInch/getSwap', (req, res) => {
+      getServerWithAuth(req, res, server => {
+        server
+          .oneInchGetSwap(req)
+          .then(response => {
+            res.json(response);
+          })
+          .catch(err => {
+            if (err) return returnError(err, res, req);
+          });
+      });
+    });
+
+    router.get('/v1/service/oneInch/getTokens', (req, res) => {
+      let server;
+      try {
+        server = getServer(req, res);
+      } catch (ex) {
+        return returnError(ex, res, req);
+      }
+      server
+        .oneInchGetTokens(req)
+        .then(response => {
+          res.json(response);
+        })
+        .catch(err => {
+          if (err) return returnError(err, res, req);
+        });
+    });
+
+    router.get('/v1/services/dex/getSpenderApprovalWhitelist', (req, res) => {
+      let server;
+      try {
+        server = getServer(req, res);
+      } catch (ex) {
+        return returnError(ex, res, req);
+      }
+
+      server.getSpenderApprovalWhitelist((err, response) => {
+        if (err) return returnError(err, res, req);
+        res.json(response);
+      });
     });
 
     router.get('/v1/service/payId/:payId', (req, res) => {

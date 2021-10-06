@@ -3,6 +3,8 @@
 import {
   BitcoreLib,
   BitcoreLibCash,
+  BitcoreLibDoge,
+  BitcoreLibLtc,
   Deriver,
   Transactions
 } from 'crypto-wallet-core';
@@ -20,7 +22,9 @@ const Bitcore_ = {
   btc: Bitcore,
   bch: BitcoreLibCash,
   eth: Bitcore,
-  xrp: Bitcore
+  xrp: Bitcore,
+  doge: BitcoreLibDoge,
+  ltc: BitcoreLibLtc
 };
 const PrivateKey = Bitcore.PrivateKey;
 const PublicKey = Bitcore.PublicKey;
@@ -33,7 +37,9 @@ const MAX_DECIMAL_ANY_COIN = 18; // more that 14 gives rounding errors
 export class Utils {
   static getChain(coin: string): string {
     let normalizedChain = coin.toUpperCase();
-    if (Constants.ERC20.includes(coin)) {
+
+    // TODO: If in the future we add a new chain that supports custom tokens, check this condition
+    if (Constants.ERC20.includes(coin.toLowerCase()) || !Constants.COINS.includes(coin.toLowerCase())) {
       normalizedChain = 'ETH';
     }
     return normalizedChain;
@@ -162,7 +168,15 @@ export class Utils {
     return { _input, addressIndex, isChange };
   }
 
-  static deriveAddress(scriptType, publicKeyRing, path, m, network, coin) {
+  static deriveAddress(
+    scriptType,
+    publicKeyRing,
+    path,
+    m,
+    network,
+    coin,
+    escrowInputs?
+  ) {
     $.checkArgument(_.includes(_.values(Constants.SCRIPT_TYPES), scriptType));
 
     coin = coin || 'btc';
@@ -186,7 +200,24 @@ export class Utils {
         );
         break;
       case Constants.SCRIPT_TYPES.P2SH:
-        bitcoreAddress = bitcore.Address.createMultisig(publicKeys, m, network);
+        if (escrowInputs) {
+          var xpub = new bitcore.HDPublicKey(publicKeyRing[0].xPubKey);
+          const inputPublicKeys = escrowInputs.map(
+            input => xpub.deriveChild(input.path).publicKey
+          );
+          bitcoreAddress = bitcore.Address.createEscrow(
+            inputPublicKeys,
+            publicKeys[0],
+            network
+          );
+          publicKeys = [publicKeys[0], ...inputPublicKeys];
+        } else {
+          bitcoreAddress = bitcore.Address.createMultisig(
+            publicKeys,
+            m,
+            network
+          );
+        }
         break;
       case Constants.SCRIPT_TYPES.P2WPKH:
         bitcoreAddress = bitcore.Address.fromPublicKey(
@@ -259,7 +290,6 @@ export class Utils {
 
   static formatAmount(satoshis, unit, opts?) {
     $.shouldBeNumber(satoshis);
-    $.checkArgument(_.includes(_.keys(Constants.UNITS), unit));
 
     var clipDecimals = (number, decimals) => {
       let str = number.toString();
@@ -293,15 +323,17 @@ export class Utils {
 
     var u = Constants.UNITS[unit];
     var precision = opts.fullPrecision ? 'full' : 'short';
+    var decimals = opts.decimals ? opts.decimals[precision] : u[precision];
+    var toSatoshis = opts.toSatoshis ? opts.toSatoshis : u.toSatoshis;
     var amount = clipDecimals(
-      satoshis / u.toSatoshis,
-      u[precision].maxDecimals
-    ).toFixed(u[precision].maxDecimals);
+      satoshis / toSatoshis,
+      decimals.maxDecimals
+    ).toFixed(decimals.maxDecimals);
     return addSeparators(
       amount,
       opts.thousandsSeparator || ',',
       opts.decimalSeparator || '.',
-      u[precision].minDecimals
+      decimals.minDecimals
     );
   }
 
@@ -359,6 +391,14 @@ export class Utils {
       }
 
       t.fee(txp.fee);
+
+      if (txp.instantAcceptanceEscrow && txp.escrowAddress) {
+        t.escrow(
+          txp.escrowAddress.address,
+          txp.instantAcceptanceEscrow + txp.fee
+        );
+      }
+
       t.change(txp.changeAddress.address);
 
       // Shuffle outputs for improved privacy
@@ -398,19 +438,21 @@ export class Utils {
         'Failed state: totalInputs - totalOutputs >= 0 at buildTx'
       );
       $.checkState(
-        totalInputs - totalOutputs <= Defaults.MAX_TX_FEE,
-        'Failed state: totalInputs - totalOutputs <= Defaults.MAX_TX_FEE at buildTx'
+        totalInputs - totalOutputs <= Defaults.MAX_TX_FEE(coin),
+        'Failed state: totalInputs - totalOutputs <= Defaults.MAX_TX_FEE(coin) at buildTx'
       );
 
       return t;
     } else {
+      // ETH ERC20 XRP
       const {
         data,
         destinationTag,
         outputs,
         payProUrl,
         tokenAddress,
-        multisigContractAddress
+        multisigContractAddress,
+        isTokenSwap
       } = txp;
       const recipients = outputs.map(output => {
         return {
@@ -425,12 +467,15 @@ export class Utils {
         recipients[0].data = data;
       }
       const unsignedTxs = [];
-      const isERC20 = tokenAddress && !payProUrl;
+      // If it is a token swap its an already created ERC20 transaction so we skip it and go directly to ETH transaction create
+      const isERC20 = tokenAddress && !payProUrl && !isTokenSwap;
       const isETHMULTISIG = multisigContractAddress;
       const chain = isETHMULTISIG
         ? 'ETHMULTISIG'
         : isERC20
         ? 'ERC20'
+        : txp.chain
+        ? txp.chain.toUpperCase()
         : this.getChain(coin);
       for (let index = 0; index < recipients.length; index++) {
         const rawTx = Transactions.create({

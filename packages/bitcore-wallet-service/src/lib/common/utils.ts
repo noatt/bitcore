@@ -8,7 +8,9 @@ const secp256k1 = require('secp256k1');
 const Bitcore = require('bitcore-lib');
 const Bitcore_ = {
   btc: Bitcore,
-  bch: require('bitcore-lib-cash')
+  bch: require('bitcore-lib-cash'),
+  doge: require('bitcore-lib-doge'),
+  ltc: require('bitcore-lib-ltc')
 };
 
 export class Utils {
@@ -35,7 +37,7 @@ export class Utils {
    * the hash is calculated there? */
   static hashMessage(text, noReverse) {
     $.checkArgument(text);
-    const buf = new Buffer(text);
+    const buf = Buffer.from(text);
     let ret = crypto.Hash.sha256sha256(buf);
     if (!noReverse) {
       ret = new bitcore.encoding.BufferReader(ret).readReverse();
@@ -66,7 +68,7 @@ export class Utils {
     let publicKeyBuffer = publicKey;
     try {
       if (!Buffer.isBuffer(publicKey)) {
-        publicKeyBuffer = new Buffer(publicKey, 'hex');
+        publicKeyBuffer = Buffer.from(publicKey, 'hex');
       }
       return publicKeyBuffer;
     } catch (e) {
@@ -78,7 +80,7 @@ export class Utils {
     try {
       let signatureBuffer = signature;
       if (!Buffer.isBuffer(signature)) {
-        signatureBuffer = new Buffer(signature, 'hex');
+        signatureBuffer = Buffer.from(signature, 'hex');
       }
       return secp256k1.signatureImport(signatureBuffer);
     } catch (e) {
@@ -105,7 +107,6 @@ export class Utils {
     }, {} as { [currency: string]: { toSatoshis: number; maxDecimals: number; minDecimals: number } });
 
     $.shouldBeNumber(satoshis);
-    $.checkArgument(_.includes(_.keys(UNITS), unit));
 
     function addSeparators(nStr, thousands, decimal, minDecimals) {
       nStr = nStr.replace('.', decimal);
@@ -124,12 +125,16 @@ export class Utils {
 
     opts = opts || {};
 
-    if (!UNITS[unit]) {
+    if (!UNITS[unit] && !opts.decimals && !opts.toSatoshis) {
       return Number(satoshis).toLocaleString();
     }
+
     const u = _.assign(UNITS[unit], opts);
-    const amount = (satoshis / u.toSatoshis).toFixed(u.maxDecimals);
-    return addSeparators(amount, opts.thousandsSeparator || ',', opts.decimalSeparator || '.', u.minDecimals);
+    var decimals = opts.decimals ? opts.decimals : u;
+    var toSatoshis = opts.toSatoshis ? opts.toSatoshis : u.toSatoshis;
+
+    const amount = (satoshis / toSatoshis).toFixed(decimals.maxDecimals);
+    return addSeparators(amount, opts.thousandsSeparator || ',', opts.decimalSeparator || '.', decimals.minDecimals);
   }
 
   static formatAmountInBtc(amount) {
@@ -239,7 +244,17 @@ export class Utils {
         new Bitcore_['bch'].Address(address);
         return 'bch';
       } catch (e) {
-        return;
+        try {
+          new Bitcore_['doge'].Address(address);
+          return 'doge';
+        } catch (e) {
+          try {
+            new Bitcore_['ltc'].Address(address);
+            return 'ltc';
+          } catch (e) {
+            return;
+          }
+        }
       }
     }
   }

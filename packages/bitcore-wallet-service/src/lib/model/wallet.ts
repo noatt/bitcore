@@ -16,7 +16,9 @@ const Bitcore = {
   btc: require('bitcore-lib'),
   bch: require('bitcore-lib-cash'),
   eth: require('bitcore-lib'),
-  xrp: require('bitcore-lib')
+  xrp: require('bitcore-lib'),
+  doge: require('bitcore-lib-doge'),
+  ltc: require('bitcore-lib-ltc')
 };
 
 export interface IWallet {
@@ -200,7 +202,7 @@ export class Wallet {
       this.network +
       this.coin +
       salt;
-    seed = bitcore.crypto.Hash.sha256(new Buffer(seed));
+    seed = bitcore.crypto.Hash.sha256(Buffer.from(seed));
     const priv = bitcore.PrivateKey(seed, this.network);
 
     this.beAuthPrivateKey2 = priv.toString();
@@ -254,21 +256,27 @@ export class Wallet {
     return this.scanning;
   }
 
-  createAddress(isChange, step) {
+  isZceCompatible() {
+    return this.coin === 'bch' && this.addressType === 'P2PKH';
+  }
+
+  createAddress(isChange, step, escrowInputs) {
     $.checkState(this.isComplete(), 'Failed state: this.isComplete() at <createAddress()>');
 
     const path = this.addressManager.getNewAddressPath(isChange, step);
     logger.debug('Deriving addr:' + path);
+    const scriptType = escrowInputs ? 'P2SH' : this.addressType;
     const address = Address.derive(
       this.id,
-      this.addressType,
+      scriptType,
       this.publicKeyRing,
       path,
       this.m,
       this.coin,
       this.network,
       isChange,
-      !this.nativeCashAddr
+      !this.nativeCashAddr,
+      escrowInputs
     );
     return address;
   }

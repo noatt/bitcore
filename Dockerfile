@@ -71,6 +71,12 @@ COPY  ./packages/crypto-wallet-core/package-lock.json ./packages/crypto-wallet-c
 COPY  ./packages/bitcore-lib-ltc/package.json ./packages/bitcore-lib-ltc/package.json
 COPY  ./packages/bitcore-lib-ltc/package-lock.json ./packages/bitcore-lib-ltc/package-lock.json
 
+COPY  ./packages/bitcore-lib-doge/package.json ./packages/bitcore-lib-doge/package.json
+COPY  ./packages/bitcore-lib-doge/package-lock.json ./packages/bitcore-lib-doge/package-lock.json
+
+COPY  ./packages/bitcore-p2p-doge/package.json ./packages/bitcore-p2p-doge/package.json
+COPY  ./packages/bitcore-p2p-doge/package-lock.json ./packages/bitcore-p2p-doge/package-lock.json
+
 
 RUN npm install
 RUN npm run bootstrap

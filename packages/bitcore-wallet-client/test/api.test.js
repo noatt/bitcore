@@ -265,13 +265,15 @@ blockchainExplorerMock.setUtxo = (address, amount, m, confirmations) => {
   var B = Bitcore_[address.coin];
   var scriptPubKey;
   switch (address.type) {
-    case Constants.SCRIPT_TYPES.P2WSH:
     case Constants.SCRIPT_TYPES.P2SH:
       scriptPubKey = address.publicKeys ? B.Script.buildMultisigOut(address.publicKeys, m).toScriptHashOut() : '';
       break;
     case Constants.SCRIPT_TYPES.P2WPKH:
     case Constants.SCRIPT_TYPES.P2PKH:
       scriptPubKey = B.Script.buildPublicKeyHashOut(address.address);
+      break;
+    case Constants.SCRIPT_TYPES.P2WSH:
+      scriptPubKey = B.Script.buildWitnessV0Out(address.address);
       break;
   }
   should.exist(scriptPubKey);
@@ -954,6 +956,52 @@ describe('client API', function() {
           '0xeb068504a817c80082520894a062a07a0a56beb2872b12f388f511d694626730870dd764300b800080018080'
         ]);
       });
+      it('should protect from creating excessive fee DOGE', () => {
+        var toAddress = 'msj42CCGruhRsFrGATiUuh25dtxYtnpbTx';
+        var changeAddress = 'msj42CCGruhRsFrGATiUuh25dtxYtnpbTx';
+
+        var publicKeyRing = [
+          {
+            xPubKey: new Bitcore.HDPublicKey(derivedPrivateKey['BIP44'])
+          }
+        ];
+
+        var utxos = helpers.generateUtxos('P2PKH', publicKeyRing, 'm/1/0', 1, [1, 2]);
+        var txp = {
+          coin: 'doge',
+          inputs: utxos,
+          toAddress: toAddress,
+          amount: 1.5e8,
+          changeAddress: {
+            address: changeAddress
+          },
+          requiredSignatures: 1,
+          outputOrder: [0, 1],
+          fee: 3.2e8, /// 3 DOGE fee, WOW!
+          derivationStrategy: 'BIP44',
+          addressType: 'P2PKH'
+        };
+
+        var x = Utils;
+
+        x.newBitcoreTransaction = () => {
+          return {
+            from: sinon.stub(),
+            to: sinon.stub(),
+            change: sinon.stub(),
+            outputs: [
+              {
+                satoshis: 1000
+              }
+            ],
+            fee: sinon.stub()
+          };
+        };
+
+        var t = x.buildTx(txp);
+        should.exist(t);
+        x.newBitcoreTransaction = x;
+      });
       it('should protect from creating excessive fee', () => {
         var toAddress = 'msj42CCGruhRsFrGATiUuh25dtxYtnpbTx';
         var changeAddress = 'msj42CCGruhRsFrGATiUuh25dtxYtnpbTx';
@@ -974,7 +1022,7 @@ describe('client API', function() {
           },
           requiredSignatures: 1,
           outputOrder: [0, 1],
-          fee: 1.2e8,
+          fee: 0.7e8,
           derivationStrategy: 'BIP44',
           addressType: 'P2PKH'
         };
@@ -997,7 +1045,7 @@ describe('client API', function() {
 
         (() => {
           var t = x.buildTx(txp);
-        }).should.throw('Failed state: totalInputs - totalOutputs <= Defaults.MAX_TX_FEE at buildTx');
+        }).should.throw('Failed state: totalInputs - totalOutputs <= Defaults.MAX_TX_FEE(coin) at buildTx');
 
         x.newBitcoreTransaction = x;
       });
@@ -4605,18 +4653,30 @@ describe('client API', function() {
     });
 
     let tests = [
-      {
+/*      {
         name: 'weightedSize: Legacy BTC',
         opts: { network: 'livenet' },
-        expectedUnsignedSize: 220
+        expectedSize: 220,
       },
       {
         name: 'weightedSize: Segwit BTC',
         opts: { network: 'livenet', useNativeSegwit: true },
-        expectedUnsignedSize: 132
+        expectedSize: 140,
       }
+ */   {
+        name: 'weightedSize: Legacy BTC',
+        opts: { network: 'livenet' },
+        expectedSize: 335,
+      },
+      {
+        name: 'weightedSize: Segwit BTC',
+        opts: { network: 'livenet', useNativeSegwit: true },
+        expectedSize: 187, // from decode-tx
+      }
+ 
     ];
 
+    let cas = 0;
     _.each(tests, x => {
       describe(x.name, () => {
         // Tests will be considered slow after 1 second elapses
@@ -4626,7 +4686,7 @@ describe('client API', function() {
             DATA = JSON.parse(TestData.payProJsonV2Body.btc);
 
             mockRequest(Buffer.from(TestData.payProJsonV2.btc.body, 'hex'), TestData.payProJsonV2.btc.headers);
-            helpers.createAndJoinWallet(clients, keys, 1, 1, x.opts, w => {
+            helpers.createAndJoinWallet(clients, keys, 2, 2, x.opts, w => {
               clients[0].createAddress((err, x0) => {
                 should.not.exist(err);
                 should.exist(x0.address);
@@ -4638,6 +4698,7 @@ describe('client API', function() {
 
                 Client.PayProV2.selectPaymentOption(opts).then(paypro => {
                   //              http.getCall(0).args[0].coin.should.equal('btc');
+                  
                   helpers.createAndPublishTxProposal(
                     clients[0],
                     {
@@ -4656,12 +4717,16 @@ describe('client API', function() {
             });
           });
         });
-        it('Should send the signed tx in paypro', function(done) {
+        it('Should send the signed tx in paypro. case: ' + cas++, function(done) {
           clients[0].getTxProposals({}, (err, txps) => {
             should.not.exist(err);
             let signatures = keys[0].sign(clients[0].getRootPath(), txps[0]);
             clients[0].pushSignatures(txps[0], signatures, (err, xx, paypro) => {
               should.not.exist(err);
+              let signatures = keys[1].sign(clients[1].getRootPath(), txps[0]);
+              clients[1].pushSignatures(txps[0], signatures, (err, xx, paypro) => {
+              should.not.exist(err);
+ 
               xx.status.should.equal('accepted');
 
               let spy = sinon.spy(Client.PayProV2.request, 'post');
@@ -4670,16 +4735,18 @@ describe('client API', function() {
                 spy.called.should.be.true;
 
                 // unsigned
+                let size = x.expectedSize;
                 postArgs[0].transactions[0].weightedSize.should.within(
-                  x.expectedUnsignedSize,
-                  x.expectedUnsignedSize + 10
+                  size - 10,
+                  size + 10
                 );
 
                 // signed
-                postArgs[1].transactions[0].weightedSize.should.within(220, 230);
+                postArgs[1].transactions[0].weightedSize.should.within(size-10, size+10);
                 done();
               });
             });
+          });
           });
         });
       });
@@ -4998,7 +5065,7 @@ describe('client API', function() {
                     payProUrl: paypro.payProUrl
                   },
                   (err, x) => {
-                    should.not.exist(err);
+                    should.not.exist(err, err);
                     resolve();
                   }
                 );
@@ -5010,22 +5077,25 @@ describe('client API', function() {
 
       it('Should send the signed tx in paypro', done => {
         clients[0].getTxProposals({}, (err, txps) => {
-          should.not.exist(err);
+          should.not.exist(err,err);
           let signatures = keys[0].sign(clients[0].getRootPath(), txps[0]);
           clients[0].pushSignatures(txps[0], signatures, (err, xx, paypro) => {
-            should.not.exist(err);
+            should.not.exist(err, err);
             xx.status.should.equal('accepted');
             let spy = sinon.spy(Client.PayProV2.request, 'post');
+
             clients[0].broadcastTxProposal(xx, (err, zz, memo) => {
-              should.not.exist(err);
+              should.not.exist(err, err);
               spy.called.should.be.true;
               var rawTx = Buffer.from(postArgs[1].transactions[0].tx, 'hex');
               var tx = new Bitcore.Transaction(rawTx);
               var script = tx.inputs[0].script;
+
               script.isPublicKeyHashIn().should.equal(true);
               memo.should.be.equal(
                 'Payment request for BitPay invoice LanynqCPoL2JQb8z8s5Z3X for merchant BitPay Visa® Load (USD-USA)'
               );
+
               done();
             });
           });
@@ -6452,6 +6522,37 @@ describe('client API', function() {
                 });
               }
             );
+          });
+        });
+      });
+
+      it('should not fail to gain access to eth wallet with unknown tokens addresses from mnemonic (Case 3)', done => {
+        helpers.createAndJoinWallet(clients, keys, 1, 1, { coin: 'eth' }, () => {
+          var words = keys[0].get(null, true).mnemonic;
+          var walletName = clients[0].credentials.walletName;
+          var copayerName = clients[0].credentials.copayerName;
+
+          clients[0].savePreferences({ tokenAddresses: ['0x9da9bc12b19b22d7c55798f722a1b6747ae9a710'] }, err => {
+            should.not.exist(err);
+              Client.serverAssistedImport(
+              { words },
+              {
+                clientFactory: () => {
+                  return helpers.newClient(app);
+                }
+              },
+              (err, k, c) => {
+                // the eth wallet + 1 unknown token addresses on preferences.
+                c.length.should.equal(1);
+                let recoveryClient = c[0];
+                recoveryClient.openWallet(err => {
+                  should.not.exist(err);
+                  recoveryClient.credentials.walletName.should.equal(walletName);
+                  recoveryClient.credentials.copayerName.should.equal(copayerName);
+                  recoveryClient.credentials.coin.should.equal('eth');
+                  done();
+                });
+              })
           });
         });
       });
